@@ -1,16 +1,26 @@
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import json, time
 
 from src.schemes import RunState, Chat, Message
 from src.agent.graph import build_graph
 from src.agent.utils import new_run_id
-from src.storage import save_state, load_state, save_report, save_chat, load_chat, list_chats, save_run_chat_mapping, get_chat_for_run
+from src.config import settings
+from src.storage import save_state, load_state, save_report, save_report_pdf, save_chat, load_chat, list_chats, save_run_chat_mapping, get_chat_for_run
 from src.chat_service import answer_followup
 
 app = FastAPI(title="AI Research Agent")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 graph = build_graph()
 
@@ -34,6 +44,7 @@ def run(req: RunRequest):
 
     if out.final_report_md:
         save_report(run_id, out.final_report_md)
+        save_report_pdf(run_id, out.final_report_md)
 
     # Create linked chat so user can follow up immediately
     chat_id = new_run_id()
@@ -76,6 +87,32 @@ def get_report(run_id: str):
     if not state.final_report_md:
         raise HTTPException(status_code=404, detail="Report not found")
     return state.final_report_md
+
+
+@app.get("/runs/{run_id}/report.pdf")
+def get_report_pdf(run_id: str):
+    """Download the research report as PDF."""
+    from pathlib import Path
+    pdf_path = Path(settings.RUNS_DIR) / f"report_{run_id}.pdf"
+    if not pdf_path.exists():
+        # Try to generate if we have the markdown
+        try:
+            state = load_state(run_id)
+            if state.final_report_md:
+                path_str = save_report_pdf(run_id, state.final_report_md)
+                if path_str:
+                    pdf_path = Path(path_str)
+        except Exception:
+            pass
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF report not found")
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"research_report_{run_id}.pdf",
+        headers={"Content-Disposition": f'attachment; filename="research_report_{run_id}.pdf"'},
+    )
+
 
 @app.get("/runs/{run_id}/stream")
 def stream_events(run_id: str):
@@ -152,6 +189,7 @@ def send_message(chat_id: str, req: SendMessageRequest):
         save_state(out)
         if out.final_report_md:
             save_report(run_id, out.final_report_md)
+            save_report_pdf(run_id, out.final_report_md)
         assistant_content = out.final_report_md or out.draft_report_md or "(No report generated)"
         chat.messages.append(Message(role="assistant", content=assistant_content, run_id=run_id))
         chat.last_run_id = run_id

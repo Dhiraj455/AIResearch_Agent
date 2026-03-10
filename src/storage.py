@@ -1,5 +1,11 @@
-import json, os
+import io
+import json
+import os
 from pathlib import Path
+
+import markdown
+from xhtml2pdf import pisa
+
 from src.schemes import RunState, Chat
 from src.config import settings
 
@@ -84,3 +90,48 @@ def save_report(run_id: str, report_md: str) -> str:
     rp = Path(settings.RUNS_DIR) / f"report_{run_id}.md"
     rp.write_text(report_md, encoding="utf-8")
     return str(rp)
+
+
+def _markdown_to_pdf(report_md: str) -> bytes:
+    """Convert markdown report to PDF bytes."""
+    html = markdown.markdown(
+        report_md,
+        extensions=["extra", "sane_lists"],
+    )
+    styled_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{ font-family: Georgia, serif; font-size: 11pt; line-height: 1.5; margin: 2cm; color: #333; }}
+            h1 {{ font-size: 18pt; margin-top: 0; border-bottom: 1px solid #ccc; padding-bottom: 0.3em; }}
+            h2 {{ font-size: 14pt; margin-top: 1.2em; }}
+            h3 {{ font-size: 12pt; margin-top: 1em; }}
+            p {{ margin: 0.5em 0; }}
+            ul, ol {{ margin: 0.5em 0; padding-left: 1.5em; }}
+            a {{ color: #059669; text-decoration: none; }}
+            a:hover {{ text-decoration: underline; }}
+            .source {{ font-size: 9pt; color: #666; }}
+        </style>
+    </head>
+    <body>{html}</body>
+    </html>
+    """
+    out = io.BytesIO()
+    pisa_status = pisa.CreatePDF(styled_html, dest=out, encoding="utf-8")
+    if pisa_status.err:
+        raise RuntimeError(f"PDF generation failed: {pisa_status.err}")
+    return out.getvalue()
+
+
+def save_report_pdf(run_id: str, report_md: str) -> str | None:
+    """Generate and save PDF from markdown report. Returns path or None on failure."""
+    try:
+        pdf_bytes = _markdown_to_pdf(report_md)
+        Path(settings.RUNS_DIR).mkdir(parents=True, exist_ok=True)
+        pdf_path = Path(settings.RUNS_DIR) / f"report_{run_id}.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+        return str(pdf_path)
+    except Exception:
+        return None
