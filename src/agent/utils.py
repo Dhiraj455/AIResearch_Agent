@@ -20,6 +20,12 @@ def _get_gemini_model():
     return genai.GenerativeModel(settings.GEMINI_MODEL)
 
 
+def _get_gemini_model_fast():
+    """Faster model for follow-ups when GEMINI_MODEL_FAST is set."""
+    model_name = settings.GEMINI_MODEL_FAST or settings.GEMINI_MODEL
+    return genai.GenerativeModel(model_name)
+
+
 _gemini_model = _get_gemini_model()
 
 
@@ -33,7 +39,6 @@ def _call_gemini(prompt: str, temperature: float) -> str:
         prompt,
         generation_config={"temperature": temperature},
     )
-    # `response.text` is a convenience property provided by google-generativeai.
     return (response.text or "").strip()
 
 
@@ -48,9 +53,14 @@ def llm_json(prompt: str) -> Any:
     return json.loads(extract_json(text))
 
 
-def llm_text(prompt: str) -> str:
-    """Get free-form Markdown/text from the LLM (Gemini)."""
-    return _call_gemini(prompt, temperature=0.3)
+def llm_text(prompt: str, fast: bool = False) -> str:
+    """Get free-form Markdown/text from the LLM (Gemini). Use fast=True for follow-ups."""
+    model = _get_gemini_model_fast() if fast else _gemini_model
+    response = model.generate_content(
+        prompt,
+        generation_config={"temperature": 0.3},
+    )
+    return (response.text or "").strip()
 
 def extract_json(text: str) -> str:
     # best-effort: find first JSON object/array in the response

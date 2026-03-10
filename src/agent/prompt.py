@@ -63,3 +63,20 @@ Find issues:
 
 Return STRICT JSON array of objects with keys: kind, detail.
 """
+
+FOLLOWUP_PROMPT = """You are a research assistant. The user previously received a research report and is asking a follow-up question.
+
+Use the research report and evidence below to answer their question. Stay grounded in the sources; cite URLs when relevant.
+If the question goes beyond the report, say so and offer what you can from the available evidence.
+
+Research report:
+{report_md}
+
+Evidence (snippets with URLs):
+{evidence_json}
+
+User's follow-up question:
+{question}
+
+Answer in Markdown, concisely but thoroughly.
+"""

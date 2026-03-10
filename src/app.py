@@ -1,21 +1,27 @@
+from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json, time
-from src.schemes import RunState
+
+from src.schemes import RunState, Chat, Message
 from src.agent.graph import build_graph
 from src.agent.utils import new_run_id
-from src.storage import save_state, load_state, save_report
+from src.storage import save_state, load_state, save_report, save_chat, load_chat, list_chats, save_run_chat_mapping, get_chat_for_run
+from src.chat_service import answer_followup
 
 app = FastAPI(title="AI Research Agent")
 
 graph = build_graph()
+
+# --- Run API (legacy) ---
 
 class RunRequest(BaseModel):
     prompt: str
 
 @app.post("/run")
 def run(req: RunRequest):
+    """Run research and automatically create a linked chat for follow-ups."""
     run_id = new_run_id()
     state = RunState(run_id=run_id, prompt=req.prompt)
 
@@ -29,13 +35,38 @@ def run(req: RunRequest):
     if out.final_report_md:
         save_report(run_id, out.final_report_md)
 
-    return {"run_id": run_id, "status": "completed", "events": len(out.events)}
+    # Create linked chat so user can follow up immediately
+    chat_id = new_run_id()
+    report_content = out.final_report_md or out.draft_report_md or "(No report generated)"
+    title = (req.prompt[:60] + "…") if len(req.prompt) > 60 else req.prompt
+    chat = Chat(
+        id=chat_id,
+        title=title,
+        messages=[
+            Message(role="user", content=req.prompt),
+            Message(role="assistant", content=report_content, run_id=run_id),
+        ],
+        last_run_id=run_id,
+    )
+    save_chat(chat)
+    save_run_chat_mapping(run_id, chat_id)
+
+    return {
+        "run_id": run_id,
+        "chat_id": chat_id,
+        "status": "completed",
+        "events": len(out.events),
+    }
 
 @app.get("/runs/{run_id}")
 def get_run(run_id: str):
     try:
         state = load_state(run_id)
-        return state.model_dump()
+        data = state.model_dump()
+        chat_id = get_chat_for_run(run_id)
+        if chat_id:
+            data["chat_id"] = chat_id
+        return data
     except Exception:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -57,3 +88,79 @@ def stream_events(run_id: str):
             time.sleep(0.01)
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+# --- Chat API ---
+
+class CreateChatResponse(BaseModel):
+    chat_id: str
+
+
+class SendMessageRequest(BaseModel):
+    content: str
+    research: bool = False  # True = run new research; False = follow-up using prior report
+
+
+@app.post("/chats", response_model=CreateChatResponse)
+def create_chat():
+    """Create a new empty chat."""
+    chat_id = new_run_id()
+    chat = Chat(id=chat_id)
+    save_chat(chat)
+    return CreateChatResponse(chat_id=chat_id)
+
+
+@app.get("/chats")
+def get_chats():
+    """List all chats, most recently updated first."""
+    chats = list_chats()
+    return [{"id": c.id, "title": c.title, "created_at": c.created_at.isoformat(), "updated_at": c.updated_at.isoformat(), "message_count": len(c.messages)} for c in chats]
+
+
+@app.get("/chats/{chat_id}")
+def get_chat(chat_id: str):
+    """Get a chat with all messages."""
+    try:
+        chat = load_chat(chat_id)
+        return chat.model_dump(mode="json")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+
+@app.post("/chats/{chat_id}/messages")
+def send_message(chat_id: str, req: SendMessageRequest):
+    """
+    Send a user message. First message or research=True runs full research;
+    otherwise answers using prior report (follow-up).
+    """
+    try:
+        chat = load_chat(chat_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    chat.messages.append(Message(role="user", content=req.content))
+    chat.updated_at = datetime.utcnow()
+
+    is_first_message = len(chat.messages) == 1
+    do_research = req.research or is_first_message or not chat.last_run_id
+
+    if do_research:
+        run_id = new_run_id()
+        state = RunState(run_id=run_id, prompt=req.content)
+        result = graph.invoke(state)
+        out = RunState(**result) if isinstance(result, dict) else result
+        save_state(out)
+        if out.final_report_md:
+            save_report(run_id, out.final_report_md)
+        assistant_content = out.final_report_md or out.draft_report_md or "(No report generated)"
+        chat.messages.append(Message(role="assistant", content=assistant_content, run_id=run_id))
+        chat.last_run_id = run_id
+        if not chat.title:
+            chat.title = (req.content[:60] + "…") if len(req.content) > 60 else req.content
+    else:
+        answer = answer_followup(req.content, chat.last_run_id)
+        chat.messages.append(Message(role="assistant", content=answer))
+
+    save_chat(chat)
+    last_msg = chat.messages[-1]
+    return {"message": {"role": last_msg.role, "content": last_msg.content, "run_id": last_msg.run_id}}

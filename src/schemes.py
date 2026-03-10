@@ -44,6 +44,25 @@ class VerificationIssue(BaseModel):
     kind: Literal["uncited_claim", "weak_citation", "missing_angle", "contradiction", "other"]
     detail: str
 
+MessageRole = Literal["user", "assistant"]
+
+
+class Message(BaseModel):
+    role: MessageRole
+    content: str
+    run_id: Optional[str] = None  # if assistant message is from a research run
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Chat(BaseModel):
+    id: str
+    title: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    messages: List[Message] = Field(default_factory=list)
+    last_run_id: Optional[str] = None  # latest research run, used for follow-up context
+
+
 class RunState(BaseModel):
     run_id: str
     prompt: str
