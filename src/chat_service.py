@@ -7,12 +7,12 @@ from src.agent.utils import llm_text
 from src.storage import load_state
 
 
-def answer_followup(question: str, run_id: str) -> str:
+def answer_followup(question: str, run_id: str, user_id: str) -> str:
     """
     Answer a follow-up question using the report and evidence from a previous research run.
     Limits evidence to top 25 items to keep context small for faster response.
     """
-    state = load_state(run_id)
+    state = load_state(run_id, user_id)
     report_md = state.final_report_md or state.draft_report_md or ""
     # Limit evidence to reduce tokens and speed up follow-up
     evidence_json = json.dumps(
