@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     USERS_DIR: str = "src/users"
 
     JWT_SECRET: str = "change-me-in-production-use-env-var"
-    CORS_ORIGINS: str = "http://localhost:3000"  # Comma-separated list for production (e.g. https://yourapp.vercel.app)
+    CORS_ORIGINS: str = "http://localhost:3000,https://ai-research-agent-iuxv.vercel.app"  # Comma-separated list for production (e.g. https://yourapp.vercel.app)
     MAX_ITERS: int = 3
     TOPK_PER_QUERY: int = 5
     MIN_EVIDENCE_PER_ANGLE: int = 2
