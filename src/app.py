@@ -1,24 +1,30 @@
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+import json
+import time
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
-import json, time
 
 from src.schemes import RunState, Chat, Message
 from src.agent.graph import build_graph
 from src.agent.utils import new_run_id
 from src.config import settings
 from src.storage import (
-    save_state, load_state, save_report, save_report_pdf, runs_dir,
-    save_chat, load_chat, list_chats, save_run_chat_mapping, get_chat_for_run,
+    save_state,
+    load_state,
+    save_report,
+    save_report_pdf,
+    get_cached_pdf,
+    save_chat,
+    load_chat,
+    list_chats,
+    save_run_chat_mapping,
+    get_chat_for_run,
 )
 from src.chat_service import answer_followup
-from src.auth import get_current_user, authenticate_user, create_access_token
-from src.user_storage import register_user
 
 app = FastAPI(title="AI Research Agent")
 
@@ -33,56 +39,6 @@ app.add_middleware(
 
 graph = build_graph()
 
-UserDep = Annotated[dict, Depends(get_current_user)]
-
-
-# --- Auth API ---
-
-class RegisterRequest(BaseModel):
-    email: str
-    password: str
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
-@app.post("/auth/register", response_model=TokenResponse)
-def register(req: RegisterRequest):
-    """Register a new user and return an access token."""
-    if not req.email or not req.email.strip():
-        raise HTTPException(status_code=400, detail="Email is required")
-    if not req.password or len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    try:
-        user = register_user(req.email.strip(), req.password)
-        token = create_access_token(user["id"], user["email"])
-        return TokenResponse(access_token=token)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/auth/login", response_model=TokenResponse)
-def login(req: LoginRequest):
-    """Authenticate and return an access token."""
-    user = authenticate_user(req.email, req.password)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token(user["id"], user["email"])
-    return TokenResponse(access_token=token)
-
-
-@app.get("/auth/me")
-def me(user: UserDep):
-    """Return current user info (requires valid token)."""
-    return {"id": user["id"], "email": user["email"]}
-
 
 # --- Run API ---
 
@@ -91,19 +47,18 @@ class RunRequest(BaseModel):
 
 
 @app.post("/run")
-def run(req: RunRequest, user: UserDep):
-    """Run research and automatically create a linked chat for follow-ups."""
-    user_id = user["id"]
+def run(req: RunRequest):
+    """Run research and automatically create a linked chat for follow-ups. Data is cached for 24 hours."""
     run_id = new_run_id()
     state = RunState(run_id=run_id, prompt=req.prompt)
 
     result = graph.invoke(state)
     out = RunState(**result) if isinstance(result, dict) else result
-    save_state(out, user_id)
+    save_state(out)
 
     if out.final_report_md:
-        save_report(run_id, out.final_report_md, user_id)
-        save_report_pdf(run_id, out.final_report_md, user_id)
+        save_report(run_id, out.final_report_md)
+        save_report_pdf(run_id, out.final_report_md)
 
     chat_id = new_run_id()
     report_content = out.final_report_md or out.draft_report_md or "(No report generated)"
@@ -117,8 +72,8 @@ def run(req: RunRequest, user: UserDep):
         ],
         last_run_id=run_id,
     )
-    save_chat(chat, user_id)
-    save_run_chat_mapping(run_id, chat_id, user_id)
+    save_chat(chat)
+    save_run_chat_mapping(run_id, chat_id)
 
     return {
         "run_id": run_id,
@@ -129,53 +84,58 @@ def run(req: RunRequest, user: UserDep):
 
 
 @app.get("/runs/{run_id}")
-def get_run(run_id: str, user: UserDep):
+def get_run(run_id: str):
     try:
-        state = load_state(run_id, user["id"])
+        state = load_state(run_id)
         data = state.model_dump()
-        chat_id = get_chat_for_run(run_id, user["id"])
+        chat_id = get_chat_for_run(run_id)
         if chat_id:
             data["chat_id"] = chat_id
         return data
-    except Exception:
-        raise HTTPException(status_code=404, detail="Run not found")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Run not found or expired")
 
 
 @app.get("/runs/{run_id}/report", response_class=PlainTextResponse)
-def get_report(run_id: str, user: UserDep):
-    state = load_state(run_id, user["id"])
+def get_report(run_id: str):
+    try:
+        state = load_state(run_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Run not found or expired")
     if not state.final_report_md:
         raise HTTPException(status_code=404, detail="Report not found")
     return state.final_report_md
 
 
 @app.get("/runs/{run_id}/report.pdf")
-def get_report_pdf(run_id: str, user: UserDep):
-    """Download the research report as PDF."""
-    user_id = user["id"]
-    pdf_path = runs_dir(user_id) / f"report_{run_id}.pdf"
-    if not pdf_path.exists():
+def get_report_pdf(run_id: str):
+    """Download the research report as PDF. Cached for 24 hours."""
+    pdf_bytes = get_cached_pdf(run_id)
+    if pdf_bytes is None:
         try:
-            state = load_state(run_id, user_id)
+            state = load_state(run_id)
             if state.final_report_md:
-                path_str = save_report_pdf(run_id, state.final_report_md, user_id)
-                if path_str:
-                    pdf_path = Path(path_str)
-        except Exception:
+                save_report_pdf(run_id, state.final_report_md)
+                pdf_bytes = get_cached_pdf(run_id)
+        except FileNotFoundError:
             pass
-    if not pdf_path.exists():
-        raise HTTPException(status_code=404, detail="PDF report not found")
-    return FileResponse(
-        pdf_path,
+    if pdf_bytes is None:
+        raise HTTPException(status_code=404, detail="PDF report not found or expired")
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
-        filename=f"research_report_{run_id}.pdf",
-        headers={"Content-Disposition": f'attachment; filename="research_report_{run_id}.pdf"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="research_report_{run_id}.pdf"',
+        },
     )
 
 
 @app.get("/runs/{run_id}/stream")
-def stream_events(run_id: str, user: UserDep):
-    state = load_state(run_id, user["id"])
+def stream_events(run_id: str):
+    try:
+        state = load_state(run_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Run not found or expired")
 
     def event_gen():
         for ev in state.events:
@@ -197,18 +157,18 @@ class SendMessageRequest(BaseModel):
 
 
 @app.post("/chats", response_model=CreateChatResponse)
-def create_chat(user: UserDep):
-    """Create a new empty chat."""
+def create_chat():
+    """Create a new empty chat. Cached for 24 hours."""
     chat_id = new_run_id()
     chat = Chat(id=chat_id)
-    save_chat(chat, user["id"])
+    save_chat(chat)
     return CreateChatResponse(chat_id=chat_id)
 
 
 @app.get("/chats")
-def get_chats(user: UserDep):
-    """List all chats for the current user, most recently updated first."""
-    chats = list_chats(user["id"])
+def get_chats():
+    """List all chats (most recently updated first). Only non-expired chats are returned."""
+    chats = list_chats()
     return [
         {
             "id": c.id,
@@ -222,26 +182,25 @@ def get_chats(user: UserDep):
 
 
 @app.get("/chats/{chat_id}")
-def get_chat(chat_id: str, user: UserDep):
-    """Get a chat with all messages (only if owned by current user)."""
+def get_chat(chat_id: str):
+    """Get a chat with all messages."""
     try:
-        chat = load_chat(chat_id, user["id"])
+        chat = load_chat(chat_id)
         return chat.model_dump(mode="json")
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(status_code=404, detail="Chat not found or expired")
 
 
 @app.post("/chats/{chat_id}/messages")
-def send_message(chat_id: str, req: SendMessageRequest, user: UserDep):
+def send_message(chat_id: str, req: SendMessageRequest):
     """
     Send a user message. First message or research=True runs full research;
-    otherwise answers using prior report (follow-up).
+    otherwise answers using prior report (follow-up). Data is cached for 24 hours.
     """
-    user_id = user["id"]
     try:
-        chat = load_chat(chat_id, user_id)
+        chat = load_chat(chat_id)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(status_code=404, detail="Chat not found or expired")
 
     chat.messages.append(Message(role="user", content=req.content))
     chat.updated_at = datetime.utcnow()
@@ -254,19 +213,19 @@ def send_message(chat_id: str, req: SendMessageRequest, user: UserDep):
         state = RunState(run_id=run_id, prompt=req.content)
         result = graph.invoke(state)
         out = RunState(**result) if isinstance(result, dict) else result
-        save_state(out, user_id)
+        save_state(out)
         if out.final_report_md:
-            save_report(run_id, out.final_report_md, user_id)
-            save_report_pdf(run_id, out.final_report_md, user_id)
+            save_report(run_id, out.final_report_md)
+            save_report_pdf(run_id, out.final_report_md)
         assistant_content = out.final_report_md or out.draft_report_md or "(No report generated)"
         chat.messages.append(Message(role="assistant", content=assistant_content, run_id=run_id))
         chat.last_run_id = run_id
         if not chat.title:
             chat.title = (req.content[:60] + "…") if len(req.content) > 60 else req.content
     else:
-        answer = answer_followup(req.content, chat.last_run_id, user_id)
+        answer = answer_followup(req.content, chat.last_run_id)
         chat.messages.append(Message(role="assistant", content=answer))
 
-    save_chat(chat, user_id)
+    save_chat(chat)
     last_msg = chat.messages[-1]
     return {"message": {"role": last_msg.role, "content": last_msg.content, "run_id": last_msg.run_id}}

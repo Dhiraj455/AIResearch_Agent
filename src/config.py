@@ -10,9 +10,12 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_MODEL_FAST: str = ""  # If set, used for follow-ups (e.g. gemini-2.0-flash) for faster response
 
+    # In-memory cache TTL (hours). Data is removed after expiry.
+    CACHE_TTL_HOURS: int = 24
+
+    # Legacy paths (unused when using cache; kept for reference)
     RUNS_DIR: str = "src/runs"
     CHATS_DIR: str = "src/chats"
-    USERS_DIR: str = "src/users"
 
     JWT_SECRET: str = "change-me-in-production-use-env-var"
     CORS_ORIGINS: str = "http://localhost:3000,https://ai-research-agent-iuxv.vercel.app"  # Comma-separated list for production (e.g. https://yourapp.vercel.app)
