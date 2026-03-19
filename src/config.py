@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # In-memory cache TTL (hours). Data is removed after expiry.
     CACHE_TTL_HOURS: int = 24
 
+    # Redis cache (recommended). Example: redis://localhost:6379/0
+    # If empty, the app will raise at import time because caching is required.
+    REDIS_URL: str = ""
+
     # Legacy paths (unused when using cache; kept for reference)
     RUNS_DIR: str = "src/runs"
     CHATS_DIR: str = "src/chats"

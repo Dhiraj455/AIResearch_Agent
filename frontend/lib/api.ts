@@ -1,19 +1,4 @@
-import { clearToken } from "./auth-store";
-
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-function getAuthHeaders(): Record<string, string> {
-  if (typeof window === "undefined") return {};
-  const token = localStorage.getItem("ai-research-token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-function handleUnauthorized(): void {
-  clearToken();
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-  }
-}
 
 export type ChatSummary = {
   id: string;
@@ -62,12 +47,10 @@ async function fetchApi<T>(
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...getAuthHeaders(),
       ...options?.headers,
     },
   });
   if (!res.ok) {
-    if (res.status === 401) handleUnauthorized();
     const err = await res.text();
     throw new Error(err || `API error ${res.status}`);
   }
@@ -81,12 +64,10 @@ async function fetchApiNoJson(
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
-      ...getAuthHeaders(),
       ...options?.headers,
     },
   });
   if (!res.ok) {
-    if (res.status === 401) handleUnauthorized();
     const err = await res.text();
     throw new Error(err || `API error ${res.status}`);
   }

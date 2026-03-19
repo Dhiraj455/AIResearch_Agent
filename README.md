@@ -9,8 +9,17 @@ Web research agent that plans, searches, fetches, and synthesizes evidence into 
 ```bash
 # From project root
 pip install -r requirements.txt
-# Set GEMINI_API_KEY in .env
+# Set GEMINI_API_KEY and REDIS_URL in .env
 uvicorn src.app:app --reload --host 0.0.0.0 --port 8000
+```
+
+Required env vars (example `.env`):
+
+```bash
+GEMINI_API_KEY=...
+REDIS_URL=redis://localhost:6379/0
+# Optional (defaults to 24)
+CACHE_TTL_HOURS=24
 ```
 
 ### Frontend (Next.js)

@@ -4,12 +4,9 @@ import { useState, useEffect, useCallback } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { ResearchOverlay } from "@/components/ResearchOverlay";
-import { AuthForm } from "@/components/AuthForm";
-import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { api, type Chat, type ChatSummary } from "@/lib/api";
 
 function MainApp() {
-  const { user, logout } = useAuth();
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
@@ -120,8 +117,6 @@ function MainApp() {
         selectedChatId={selectedChatId}
         onSelectChat={handleSelectChat}
         onNewResearch={handleNewResearch}
-        onLogout={logout}
-        userEmail={user?.email ?? null}
         isLoading={isResearching}
         isChatsLoading={isLoadingChats}
       />
@@ -150,19 +145,5 @@ function MainApp() {
 }
 
 export default function Home() {
-  const { isAuthenticated, isLoading, login, register } = useAuth();
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return <AuthForm onLogin={login} onRegister={register} />;
-  }
-
   return <MainApp />;
 }
