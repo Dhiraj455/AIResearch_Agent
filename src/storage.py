@@ -1,5 +1,5 @@
 """
-Redis-backed cache for runs, chats, and report PDFs with TTL.
+Cache for runs, chats, and report PDFs with TTL (Redis, or in-process fallback; see src/cache.py).
 
 This project intentionally does not persist user data long-term.
 All cached items expire after CACHE_TTL_HOURS (default 24h).
@@ -11,23 +11,14 @@ import io
 from typing import Optional
 
 import markdown
-import redis
 from xhtml2pdf import pisa
 
+from src.cache import kv
 from src.config import settings
 from src.schemes import Chat, RunState
 
 
 _TTL_S = settings.CACHE_TTL_HOURS * 3600
-
-
-def _redis() -> redis.Redis:
-    if not settings.REDIS_URL:
-        raise RuntimeError(
-            "REDIS_URL is not set. Set it in your environment or .env (e.g. redis://localhost:6379/0)."
-        )
-    # decode_responses=False => store bytes safely (PDF, etc.)
-    return redis.Redis.from_url(settings.REDIS_URL, decode_responses=False)
 
 
 def _k_run(run_id: str) -> str:
@@ -50,13 +41,11 @@ def _k_pdf(run_id: str) -> str:
 
 
 def save_state(state: RunState) -> None:
-    r = _redis()
-    r.setex(_k_run(state.run_id), _TTL_S, state.model_dump_json(indent=2).encode("utf-8"))
+    kv.setex(_k_run(state.run_id), _TTL_S, state.model_dump_json(indent=2).encode("utf-8"))
 
 
 def load_state(run_id: str) -> RunState:
-    r = _redis()
-    raw = r.get(_k_run(run_id))
+    raw = kv.get(_k_run(run_id))
     if not raw:
         raise FileNotFoundError(f"Run {run_id} not found or expired")
     text = raw.decode("utf-8")
@@ -110,16 +99,14 @@ def save_report_pdf(run_id: str, report_md: str) -> str | None:
     """
     try:
         pdf_bytes = _markdown_to_pdf(report_md)
-        r = _redis()
-        r.setex(_k_pdf(run_id), _TTL_S, pdf_bytes)
+        kv.setex(_k_pdf(run_id), _TTL_S, pdf_bytes)
         return run_id
     except Exception:
         return None
 
 
 def get_cached_pdf(run_id: str) -> Optional[bytes]:
-    r = _redis()
-    raw = r.get(_k_pdf(run_id))
+    raw = kv.get(_k_pdf(run_id))
     if not raw:
         return None
     return raw
@@ -129,25 +116,21 @@ def get_cached_pdf(run_id: str) -> Optional[bytes]:
 
 
 def save_chat(chat: Chat) -> None:
-    r = _redis()
-    r.setex(_k_chat(chat.id), _TTL_S, chat.model_dump_json(indent=2).encode("utf-8"))
+    kv.setex(_k_chat(chat.id), _TTL_S, chat.model_dump_json(indent=2).encode("utf-8"))
 
 
 def load_chat(chat_id: str) -> Chat:
-    r = _redis()
-    raw = r.get(_k_chat(chat_id))
+    raw = kv.get(_k_chat(chat_id))
     if not raw:
         raise FileNotFoundError(f"Chat {chat_id} not found or expired")
     return Chat.model_validate_json(raw.decode("utf-8"))
 
 
 def list_chats() -> list[Chat]:
-    r = _redis()
-    # Note: KEYS is OK for small dev use; for scale use SCAN.
-    keys = r.keys(_k_chat("*"))
+    keys = kv.keys(_k_chat("*"))
     chats: list[Chat] = []
     for k in keys:
-        raw = r.get(k)
+        raw = kv.get(k)
         if not raw:
             continue
         try:
@@ -159,14 +142,12 @@ def list_chats() -> list[Chat]:
 
 
 def save_run_chat_mapping(run_id: str, chat_id: str) -> None:
-    r = _redis()
     # Tie mapping TTL to run TTL.
-    r.setex(_k_run_chat(run_id), _TTL_S, chat_id.encode("utf-8"))
+    kv.setex(_k_run_chat(run_id), _TTL_S, chat_id.encode("utf-8"))
 
 
 def get_chat_for_run(run_id: str) -> str | None:
-    r = _redis()
-    raw = r.get(_k_run_chat(run_id))
+    raw = kv.get(_k_run_chat(run_id))
     if not raw:
         return None
     return raw.decode("utf-8")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Literal
+from typing import Any, List, Dict, Optional, Literal
 from datetime import datetime
 
 SourceType = Literal["academic", "industry", "news", "blog", "docs", "unknown"]
@@ -26,18 +26,27 @@ class Document(BaseModel):
     text: str
     status: Optional[int] = None
 
+Verdict = Literal["supported", "refuted", "unclear"]
+
 class Evidence(BaseModel):
     angle: str
-    claim_type: ClaimType
-    snippet: str
+    claim_type: ClaimType = "unknown"
+    snippet: str  # verbatim quote from the source
     url: str
-    support: str  # what this snippet supports (short label)
+    support: str  # the claim this quote supports
+    iter: int = 0
+    quote_found: Optional[bool] = None  # deterministic substring check against scraped text
+    verdicts: Dict[str, Verdict] = Field(default_factory=dict)  # model name -> vote
+    verified: Optional[bool] = None  # final decision; None = not checked yet
 
 class Coverage(BaseModel):
     evidence_per_angle: Dict[str, int] = Field(default_factory=dict)
     unique_sources: int = 0
     academic_sources: int = 0
     industry_sources: int = 0
+    verified_claims: int = 0
+    refuted_claims: int = 0
+    last_refuted_ratio: float = 0.0  # refuted share of the latest pass's claims
     gaps: List[str] = Field(default_factory=list)
 
 class VerificationIssue(BaseModel):
@@ -72,6 +81,9 @@ class RunState(BaseModel):
     search_results: List[SearchResult] = Field(default_factory=list)
     documents: List[Document] = Field(default_factory=list)
     evidence: List[Evidence] = Field(default_factory=list)
+    used_queries: List[str] = Field(default_factory=list)
+    extracted_urls: List[str] = Field(default_factory=list)
+    failed_urls: List[str] = Field(default_factory=list)
 
     coverage: Coverage = Field(default_factory=Coverage)
     draft_report_md: Optional[str] = None
@@ -79,3 +91,7 @@ class RunState(BaseModel):
     final_report_md: Optional[str] = None
 
     events: List[dict] = Field(default_factory=list)  # for UI timeline
+    stats: Dict[str, Any] = Field(default_factory=dict)  # cache hits, timings, quorum agreement
+
+    def verified_evidence(self) -> List[Evidence]:
+        return [e for e in self.evidence if e.verified]

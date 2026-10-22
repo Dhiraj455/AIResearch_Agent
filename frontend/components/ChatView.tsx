@@ -3,90 +3,117 @@
 import { useRef, useEffect } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
+import { ResearchSteps, type TimedEvent } from "./ResearchSteps";
 import type { Chat, Message } from "@/lib/api";
+
+/** A research run in progress (before its chat exists). */
+export type ActiveResearch = {
+  prompt: string;
+  events: TimedEvent[];
+  startedAt: number;
+  runId: string | null;
+  stopping: boolean;
+};
+
+/** Steps of a run finished in this session, so they show without refetching. */
+export type RunTrace = { events: TimedEvent[]; totalSeconds: number };
 
 type Props = {
   chat: Chat | null;
+  research: ActiveResearch | null;
+  traces: Record<string, RunTrace>;
   onSendMessage: (content: string) => void;
+  onStop: () => void;
   isLoading: boolean;
-  isResearching: boolean;
+  isSending: boolean;
 };
 
 export function ChatView({
   chat,
+  research,
+  traces,
   onSendMessage,
+  onStop,
   isLoading,
-  isResearching,
+  isSending,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messages = chat?.messages ?? [];
+  const hasReport = messages.some((m) => m.role === "assistant" && m.run_id);
+  const isEmpty = messages.length === 0 && !research;
 
+  // Keep the newest message / step in view.
   useEffect(() => {
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [chat?.messages?.length]);
-
-  const messages = chat?.messages ?? [];
-  const hasReport = messages.some((m) => m.role === "assistant" && m.run_id);
+  }, [messages.length, research?.events.length, isSending]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-white dark:bg-zinc-950">
+    <div className="flex min-h-0 flex-1 flex-col bg-transparent">
       <div
         ref={scrollRef}
-        className="scrollbar-theme flex-1 overflow-y-auto bg-white p-6 dark:bg-zinc-950"
+        className="scrollbar-theme flex-1 overflow-y-auto bg-transparent px-6 py-6 lg:px-10"
       >
-        {messages.length === 0 && !isResearching && (
-          <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
-            <div className="rounded-2xl bg-emerald-100/50 p-8 dark:bg-emerald-900/20">
-              <svg
-                className="mx-auto mb-4 h-16 w-16 text-emerald-600 dark:text-emerald-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-              <h2 className="mb-2 text-xl font-semibold">AI Research Agent</h2>
-              <p className="max-w-sm text-zinc-600 dark:text-zinc-400">
-                Enter a research question below. I&apos;ll search the web, gather
-                sources, and create a grounded report with citations.
+        {isEmpty && (
+          <div className="flex h-full flex-col justify-center gap-8 pb-10">
+            <div className="mx-auto max-w-3xl text-center">
+              <h2 className="text-4xl font-semibold leading-tight tracking-tight text-slate-900 lg:text-5xl">
+                Hi there, ready to build
+                <br />
+                research that holds up?
+              </h2>
+              <p className="mt-4 text-base text-slate-500">
+                Every claim in the report is checked against its source by three independent models.
               </p>
+            </div>
+            <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 md:grid-cols-3">
+              {[
+                "Create a plan, angles, and search strategy for your topic.",
+                "Collect and compare claims from multiple sources with citations.",
+                "Verify report quality for missing angles and weak evidence.",
+              ].map((text, i) => (
+                <div
+                  key={text}
+                  className="rounded-3xl border border-white/70 bg-white/75 p-6 text-left shadow-sm"
+                >
+                  <p className="text-sm font-medium text-slate-800">{text}</p>
+                  <p className="mt-6 text-xs text-slate-500">
+                    {i === 0 ? "Fast start" : i === 1 ? "Evidence flow" : "Verification"}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
         )}
-        {isResearching && messages.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center gap-4">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-            <p className="text-zinc-500">
-              Research in progress... This may take 5–10 minutes.
-            </p>
-            <p className="text-sm text-zinc-400">
-              Searching, fetching sources, and synthesizing a report.
-            </p>
-          </div>
-        )}
-        {messages.length > 0 && (
-          <div className="mx-auto flex max-w-3xl flex-col gap-6">
+        {!isEmpty && (
+          <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
             {messages.map((msg: Message, i: number) => (
               <MessageBubble
                 key={i}
                 role={msg.role}
                 content={msg.content}
                 runId={msg.run_id}
+                trace={msg.run_id ? traces[msg.run_id] : undefined}
               />
             ))}
-            {isResearching && messages[messages.length - 1]?.role === "user" && (
+            {research && (
+              <>
+                <MessageBubble role="user" content={research.prompt} />
+                <ResearchSteps
+                  events={research.events}
+                  status={research.stopping ? "stopping" : "running"}
+                  startedAt={research.startedAt}
+                />
+              </>
+            )}
+            {isSending && (
               <div className="flex justify-start">
-                <div className="flex items-center gap-2 rounded-2xl bg-zinc-100 px-4 py-3 dark:bg-zinc-800">
-                  <div className="h-2 w-2 animate-bounce rounded-full bg-emerald-500 [animation-delay:0ms]" />
-                  <div className="h-2 w-2 animate-bounce rounded-full bg-emerald-500 [animation-delay:150ms]" />
-                  <div className="h-2 w-2 animate-bounce rounded-full bg-emerald-500 [animation-delay:300ms]" />
+                <div className="flex items-center gap-1.5 rounded-2xl border border-white/70 bg-white/80 px-4 py-3 shadow-sm">
+                  <div className="h-2 w-2 animate-bounce rounded-full bg-indigo-500 [animation-delay:0ms]" />
+                  <div className="h-2 w-2 animate-bounce rounded-full bg-indigo-500 [animation-delay:150ms]" />
+                  <div className="h-2 w-2 animate-bounce rounded-full bg-indigo-500 [animation-delay:300ms]" />
                 </div>
               </div>
             )}
@@ -95,12 +122,17 @@ export function ChatView({
       </div>
       <ChatInput
         placeholder={
-          hasReport
-            ? "Ask a follow-up question..."
-            : "What would you like to research?"
+          research
+            ? "Research in progress…"
+            : hasReport
+              ? "Ask a follow-up question..."
+              : "What would you like to research?"
         }
         onSubmit={onSendMessage}
-        disabled={isLoading || isResearching}
+        onStop={onStop}
+        isRunning={research !== null}
+        isStopping={research?.stopping ?? false}
+        disabled={isLoading || isSending}
       />
     </div>
   );

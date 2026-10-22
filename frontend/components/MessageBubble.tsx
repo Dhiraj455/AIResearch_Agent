@@ -1,6 +1,8 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import { ResearchTrace } from "./ResearchSteps";
+import type { RunTrace } from "./ChatView";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -8,9 +10,11 @@ type Props = {
   role: "user" | "assistant";
   content: string;
   runId?: string | null;
+  /** Steps already known for this run (finished in this session); otherwise loaded on demand. */
+  trace?: RunTrace;
 };
 
-export function MessageBubble({ role, content, runId }: Props) {
+export function MessageBubble({ role, content, runId, trace }: Props) {
   const isUser = role === "user";
 
   return (
@@ -18,22 +22,29 @@ export function MessageBubble({ role, content, runId }: Props) {
       className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}
     >
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+        className={`rounded-2xl ${
           isUser
-            ? "bg-emerald-600 text-white"
-            : "bg-zinc-100 dark:bg-zinc-800"
+            ? "max-w-[75%] bg-[#171a3a] px-4 py-3 text-white"
+            : "w-full border border-white/70 bg-white/85 px-6 py-5 text-slate-800 shadow-sm"
         }`}
       >
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm">{content}</p>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
+            {runId && (
+              <ResearchTrace
+                runId={runId}
+                events={trace?.events}
+                totalSeconds={trace?.totalSeconds}
+              />
+            )}
             {runId && (
               <a
                 href={`${API_BASE}/runs/${runId}/report.pdf`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-700"
+                className="inline-flex items-center gap-2 rounded-lg bg-[#2f3c97] px-3 py-1.5 text-sm font-medium text-white transition hover:bg-[#253279]"
               >
                 <svg
                   className="h-4 w-4"
@@ -51,7 +62,7 @@ export function MessageBubble({ role, content, runId }: Props) {
                 Download report (PDF)
               </a>
             )}
-            <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5">
+            <div className="report-md">
             <ReactMarkdown
               components={{
                 a: ({ href, children }) => (
@@ -59,7 +70,7 @@ export function MessageBubble({ role, content, runId }: Props) {
                     href={href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-emerald-600 hover:underline dark:text-emerald-400"
+                    className="text-indigo-700 hover:underline"
                   >
                     {children}
                   </a>

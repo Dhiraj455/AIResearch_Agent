@@ -13,20 +13,59 @@ EVIDENCE_PROMPT = """You are extracting evidence from a source for a research re
 User prompt:
 {prompt}
 
-Angle to focus:
-{angle}
+Research angles (use these exact strings for "angle"):
+{angles}
 
-Source text (may be long):
+Source text:
+<<<
 {text}
+>>>
 
-Extract 2-6 evidence items relevant to the angle.
-Each evidence item must be a short snippet (1-3 sentences max) copied/paraphrased closely from the text,
-plus:
+Extract up to {max_items} evidence items relevant to any of the angles.
+Rules:
+- "snippet" MUST be an exact, verbatim quote copied character-for-character from the source text
+  (1-3 sentences). Do not paraphrase, merge sentences, or fix typos. Quotes not found verbatim are discarded.
+- "support" is the short claim (one sentence) that the quote directly supports.
 - claim_type: benefit|risk|tradeoff|best_practice|unknown
-- support: a short label of what it supports (e.g., "distribution shift harms")
-- url: {url}
+- If nothing relevant is in the text, return an empty array.
 
-Return STRICT JSON array of objects with keys: angle, claim_type, snippet, url, support.
+Return STRICT JSON object: {{"items": [{{"angle": "...", "claim_type": "...", "snippet": "...", "support": "..."}}]}}
+"""
+
+VERIFY_CLAIMS_PROMPT = """You are a skeptical fact-checker. For each claim below, decide whether the SOURCE TEXT
+directly supports the claim using its quote. Judge only against the source text, never prior knowledge.
+
+- supported: the quote is in the source and clearly supports the claim as stated
+- refuted: the quote is missing/altered, or the claim overstates, distorts, or contradicts the source
+- unclear: the source is related but does not clearly establish the claim
+
+Source URL: {url}
+Source text:
+<<<
+{text}
+>>>
+
+Claims:
+{claims_json}
+
+Return STRICT JSON object: {{"verdicts": [{{"id": <claim id>, "verdict": "supported|refuted|unclear"}}]}}
+"""
+
+GAP_QUERIES_PROMPT = """You are a web research agent refining a search after a previous pass.
+
+User prompt:
+{prompt}
+
+Queries already used (do not repeat these):
+{used}
+
+Gaps to fill:
+{gaps}
+
+Write 4-8 NEW web search queries targeting these gaps. When academic or industry sources are missing,
+target papers (e.g. arXiv, ACM, IEEE) or company engineering blogs and reports.
+
+Return STRICT JSON object: {{"queries": ["..."]}}
 """
 
 WRITE_PROMPT = """Write a Markdown research report answering the user's prompt.
@@ -61,7 +100,7 @@ Find issues:
 - weak_citation: citation exists but doesn't match the claim
 - contradiction: report asserts certainty despite conflicting evidence
 
-Return STRICT JSON array of objects with keys: kind, detail.
+Return STRICT JSON object: {{"issues": [{{"kind": "...", "detail": "..."}}]}}
 """
 
 FOLLOWUP_PROMPT = """You are a research assistant. The user previously received a research report and is asking a follow-up question.
